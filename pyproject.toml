@@ -1,0 +1,12 @@
+[project]
+name = "zero-architecture"
+version = "0.1.0"
+description = "Temporal coordination for safety-critical systems"
+requires-python = ">=3.9"
+
+[build-system]
+requires = ["setuptools>=65.5.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["core", "simulation", "visualization"]

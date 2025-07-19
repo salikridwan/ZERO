@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Data
+*.csv
+*.log
+*.png
+*.pdf
+
+# Environments
+.env
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/__pycache__/
+.venv/
+*.pyc
+data/
+.DS_Store
