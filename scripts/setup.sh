@@ -8,6 +8,7 @@ DATA_DIRS=("data/drift_logs" "data/visualizations" "data/messages")
 
 echo "Setting up Zero development environment..."
 
+sudo apt install -y python3 python3-venv python3-pip pre-commit
 # Create virtual environment
 if [ ! -d "$VENV_DIR" ]; then
     echo "Creating Python virtual environment..."
