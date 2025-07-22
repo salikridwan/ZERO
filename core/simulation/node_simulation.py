@@ -29,6 +29,7 @@
 # -------------------------------------------------
 
 from core.fingerprint.temporal_fingerprint import generate_fingerprint
+from core.simulation.clock_drift_model import CompensatedClock
 import numpy as np
 import time
 import random
@@ -45,31 +46,39 @@ logging.basicConfig(
 )
 
 class VirtualNode:
-    def __init__(self, node_id, base_drift=10, noise_level=0.5, drift_trend=0.01):
+    def __init__(self, node_id, base_drift=10, noise_level=0.5, 
+                 compensation_interval=1.0, sync_interval=30.0):
         """
         Simulate a node with:
         - base_drift: Average drift in PPM
         - noise_level: Random fluctuation magnitude
-        - drift_trend: Long-term drift change per sample
+        - compensation_interval: Interval for drift compensation
+        - sync_interval: Interval for synchronization with leader
         """
         self.id = node_id
-        self.base_drift = base_drift
-        self.noise_level = noise_level
-        self.drift_trend = drift_trend
+        self.clock = CompensatedClock(
+            base_drift=base_drift,
+            noise_level=noise_level,
+            compensation_interval=compensation_interval
+        )
+        self.sync_interval = sync_interval
+        self.last_sync = time.monotonic()
         self.drift_history = []
-        self.current_drift = base_drift
         
-    def simulate_drift(self, duration=10):
-        """Generate simulated drift data for a duration"""
-        # Simulate 10Hz sampling (10 samples per second)
-        samples = int(duration * 10)
-        
-        for _ in range(samples):
-            # Apply trend and random noise
-            self.current_drift += self.drift_trend + random.gauss(0, self.noise_level)
-            self.drift_history.append(self.current_drift)
-        
-        return self.current_drift
+    def simulate_drift(self, duration=10, leader_node=None):
+        """Simulate time passage with compensation"""
+        start = time.monotonic()
+        while time.monotonic() - start < duration:
+            logical_time, current_drift = self.clock.update()
+            self.drift_history.append(current_drift)
+            
+            # Handle periodic sync
+            current_time = time.monotonic()
+            if leader_node and (current_time - self.last_sync > self.sync_interval):
+                self.clock.sync_to_leader(leader_node.clock.logical_clock)
+                self.last_sync = current_time
+                
+        return current_drift
     
     def get_fingerprint(self):
         return generate_fingerprint(self.drift_history)
@@ -77,7 +86,7 @@ class VirtualNode:
     def reset(self):
         """Reset drift history for new tests"""
         self.drift_history = []
-        self.current_drift = self.base_drift
+        self.clock.reset()
 
 def calculate_fingerprint_distance(fp1, fp2):
     """Calculate normalized Hamming distance between hex fingerprints"""

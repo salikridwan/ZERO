@@ -41,6 +41,8 @@ import logging
 from datetime import datetime
 import os
 import platform
+# Use relative import for DriftPredictor
+from .drift_predictor import DriftPredictor
 
 # Configuration
 SAMPLE_INTERVAL = 0.1  # Seconds (100ms)
@@ -62,6 +64,7 @@ class DriftCollector:
         self.index = 0
         self.running = True
         self.log_file = os.path.join(LOG_DIR, f"drift_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        self.predictor = DriftPredictor(model_type='kalman')  # or 'ar1'
         
         # Configure logging
         logging.basicConfig(
@@ -79,7 +82,7 @@ class DriftCollector:
         # Create CSV logfile
         with open(self.log_file, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['timestamp', 'monotonic', 'perf_counter', 'drift_ppm'])
+            writer.writerow(['timestamp', 'monotonic', 'perf_counter', 'drift_ppm', 'predicted_drift_ppm'])
 
     def log_system_info(self):
         """Log system configuration details"""
@@ -145,7 +148,11 @@ class DriftCollector:
             # Update circular buffer
             self.drift_buffer[self.index] = drift
             self.index = (self.index + 1) % BUFFER_SIZE
-            
+
+            # Update predictor and get prediction
+            self.predictor.update(drift)
+            predicted_drift = self.predictor.predict()
+
             # Log to CSV
             with open(self.log_file, 'a', newline='') as f:
                 writer = csv.writer(f)
@@ -153,9 +160,10 @@ class DriftCollector:
                     measurement['timestamp'],
                     measurement['monotonic'],
                     measurement['perf_counter'],
-                    measurement['drift_ppm']
+                    measurement['drift_ppm'],
+                    predicted_drift
                 ])
-            
+
             # Calculate statistics on full buffer
             if self.index == 0:
                 window = self.drift_buffer
@@ -166,7 +174,8 @@ class DriftCollector:
                     'max': np.max(window)
                 }
                 logging.debug(f"Drift Stats: μ={stats['mean']:.2f}ppm σ={stats['std']:.2f} "
-                              f"Range=[{stats['min']:.2f}, {stats['max']:.2f}]")
+                              f"Range=[{stats['min']:.2f}, {stats['max']:.2f}] "
+                              f"Predictor: {predicted_drift:.2f}ppm")
             
             # Sleep for remaining interval
             elapsed = time.perf_counter() - start_time
