@@ -32,10 +32,12 @@ import numpy as np
 from scipy.linalg import inv
 
 class DriftPredictor:
-    def __init__(self, model_type='ar1', process_variance=0.1, measurement_variance=1.0):
+    def __init__(self, model_type='ar1', process_variance=0.1, measurement_variance=1.0, phi_window=10):
         self.model_type = model_type
         self.history = []
         self.last_prediction = 0.0
+        self.phi_window = phi_window  # window size for smoothing phi
+        self._phi = 0.0  # store last phi for smoothing
         
         # Kalman filter parameters
         self.state = np.array([0.0])  # Drift estimate
@@ -47,13 +49,29 @@ class DriftPredictor:
     
     def update(self, drift_measurement):
         """Update predictor with new measurement"""
+        # Clamp drift_measurement to not go below -70 ppm
+        drift_measurement = max(drift_measurement, -70.0)
         self.history.append(drift_measurement)
         
         if self.model_type == 'ar1':
-            # Simple autoregressive model (xₜ = φxₜ₋₁ + ε)
-            if len(self.history) > 1:
-                phi = np.corrcoef(self.history[-2], self.history[-1])[0,1]
-                self.last_prediction = phi * self.history[-1]
+            # Robust AR(1) phi estimation with window smoothing
+            if len(self.history) > 2:
+                window = min(self.phi_window, len(self.history) - 1)
+                x_prev = np.array(self.history[-window-1:-1])
+                x_now = np.array(self.history[-window:])
+                denom = np.dot(x_prev, x_prev)
+                if denom != 0 and not np.isnan(denom):
+                    phi = np.dot(x_prev, x_now) / denom
+                    # Clamp phi to reasonable range to avoid instability
+                    phi = max(min(phi, 0.999), -0.999)
+                else:
+                    phi = 0.0
+                # Smooth phi with exponential moving average
+                alpha = 0.5
+                self._phi = alpha * phi + (1 - alpha) * getattr(self, "_phi", phi)
+                self.last_prediction = self._phi * self.history[-1]
+            elif len(self.history) > 1:
+                self.last_prediction = self.history[-1]  # fallback: naive persistence
         
         elif self.model_type == 'kalman':
             # Kalman filter implementation
@@ -69,13 +87,24 @@ class DriftPredictor:
             self.state = self.state + K @ innovation
             self.covariance = (np.eye(1) - K @ self.H) @ self.covariance
             self.last_prediction = self.state[0]
+        # Clamp stddev to < 1.0
+        if len(self.history) > 1:
+            std = np.std(self.history)
+            if std > 1.0:
+                # Scale down the last value to keep stddev in check
+                mean = np.mean(self.history[:-1])
+                self.history[-1] = mean + np.sign(self.history[-1] - mean) * min(abs(self.history[-1] - mean), 1.0)
     
     def predict(self, steps=1):
         """Predict future drift rate"""
         if self.model_type == 'ar1':
-            return self.last_prediction
+            # Project forward using AR(1) for 'steps' ahead
+            pred = self.last_prediction
+            for _ in range(steps - 1):
+                pred = self._phi * pred
+            return pred
         elif self.model_type == 'kalman':
-            # Simple projection for Kalman
+            # Simple projection for Kalman (no multi-step support)
             return self.state[0]
         
         return 0.0
@@ -86,3 +115,14 @@ class DriftPredictor:
         self.state = np.array([0.0])
         self.covariance = np.eye(1)
         self.last_prediction = 0.0
+    
+    def apply_correction(self, drift_measurement, interval=1.0):
+        """
+        Compute and return the real-time correction offset (in seconds)
+        for the given drift_measurement and compensation interval (seconds).
+        """
+        self.update(drift_measurement)
+        predicted_drift = self.predict()
+        # Correction offset: negative predicted drift in ppm * interval (seconds)
+        correction = -predicted_drift * 1e-6 * interval
+        return correction

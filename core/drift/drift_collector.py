@@ -55,7 +55,7 @@ WARMUP_SAMPLES = 5     # ignore first few samples
 os.makedirs(LOG_DIR, exist_ok=True)
 
 class DriftCollector:
-    def __init__(self):
+    def __init__(self, external_sync_fn=None):
         # Allow clocks to stabilize
         time.sleep(1)
         self.reference_start = time.perf_counter()
@@ -65,6 +65,7 @@ class DriftCollector:
         self.running = True
         self.log_file = os.path.join(LOG_DIR, f"drift_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
         self.predictor = DriftPredictor(model_type='kalman')  # or 'ar1'
+        self.external_sync_fn = external_sync_fn  # Callable that returns external sync drift_ppm or None
         
         # Configure logging
         logging.basicConfig(
@@ -145,12 +146,22 @@ class DriftCollector:
                 continue  # skip these early cursed values
 
             drift = measurement['drift_ppm']
+            # Optionally pull external sync input
+            external_drift = None
+            if self.external_sync_fn is not None:
+                try:
+                    external_drift = self.external_sync_fn()
+                except Exception as e:
+                    logging.warning(f"External sync input failed: {e}")
+            # Prefer external sync if available
+            drift_input = external_drift if external_drift is not None else drift
+
             # Update circular buffer
-            self.drift_buffer[self.index] = drift
+            self.drift_buffer[self.index] = drift_input
             self.index = (self.index + 1) % BUFFER_SIZE
 
             # Update predictor and get prediction
-            self.predictor.update(drift)
+            self.predictor.update(drift_input)
             predicted_drift = self.predictor.predict()
 
             # Log to CSV
@@ -160,7 +171,7 @@ class DriftCollector:
                     measurement['timestamp'],
                     measurement['monotonic'],
                     measurement['perf_counter'],
-                    measurement['drift_ppm'],
+                    drift_input,
                     predicted_drift
                 ])
 

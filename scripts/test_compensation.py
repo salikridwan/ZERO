@@ -51,16 +51,28 @@ def run_compensation_test():
     node_a_drifts = []
     node_b_drifts = []
     compensation_stats = []
-    
+    live_corrections = []
+
     start_time = time.monotonic()
     current_time = start_time
-    
+
     print("Running test...")
     while current_time - start_time < test_duration:
         # Simulate with periodic sync
         node_a.simulate_drift(interval, leader_node=node_a)
         node_b.simulate_drift(interval, leader_node=node_a)  # Node A is leader
-        
+
+        # --- Live Drift Compensation Engine™ simulation ---
+        # Get the most recent drift measurement for node_b
+        if node_b.drift_history:
+            drift_meas = node_b.drift_history[-1]
+            # Compute live correction (in seconds) for the interval
+            correction = node_b.clock.predictor.apply_correction(drift_meas, interval)
+        else:
+            correction = 0.0
+        live_corrections.append(correction)
+        # Optionally, apply this correction to a simulated logical clock here if desired
+
         # Validate fingerprints
         distance = calculate_fingerprint_distance(
             node_a.get_fingerprint(),
@@ -87,16 +99,16 @@ def run_compensation_test():
     print(f"Sync events: {compensation_stats[-1]['compensation_count']}")
     
     # Plot results
-    plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(12, 10))
     
-    plt.subplot(2, 1, 1)
+    plt.subplot(3, 1, 1)
     plt.plot(times, distances, 'b-', label='Fingerprint Distance')
     plt.axhline(y=0.1, color='r', linestyle='--', label='Threshold')
     plt.ylabel('Fingerprint Distance')
     plt.title('Temporal Synchronization Quality')
     plt.legend()
     
-    plt.subplot(2, 1, 2)
+    plt.subplot(3, 1, 2)
     plt.plot(times, node_a_drifts, 'g-', label='Node A Drift')
     plt.plot(times, node_b_drifts, 'm-', label='Node B Drift')
     plt.plot(times, [s['predicted_drift'] for s in compensation_stats], 
@@ -104,6 +116,13 @@ def run_compensation_test():
     plt.xlabel('Time (seconds)')
     plt.ylabel('Drift (PPM)')
     plt.title('Drift Behavior with Compensation')
+    plt.legend()
+
+    plt.subplot(3, 1, 3)
+    plt.plot(times, live_corrections, 'k-', label='Live Correction (s)')
+    plt.xlabel('Time (seconds)')
+    plt.ylabel('Correction (seconds)')
+    plt.title('Live Drift Compensation Engine™ Output')
     plt.legend()
     
     plt.tight_layout()

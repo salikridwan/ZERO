@@ -37,6 +37,8 @@ import logging
 from datetime import datetime
 import sys
 import os
+import queue
+import threading
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
 # Configure logging
@@ -47,7 +49,7 @@ logging.basicConfig(
 
 class VirtualNode:
     def __init__(self, node_id, base_drift=10, noise_level=0.5, 
-                 compensation_interval=1.0, sync_interval=30.0):
+                 compensation_interval=1.0, sync_interval=30.0, drift_trend=0.0):
         """
         Simulate a node with:
         - base_drift: Average drift in PPM
@@ -64,6 +66,9 @@ class VirtualNode:
         self.sync_interval = sync_interval
         self.last_sync = time.monotonic()
         self.drift_history = []
+        self.event_queue = queue.Queue()
+        self.cpu_running = False
+        self.drift_trend = drift_trend
         
     def simulate_drift(self, duration=10, leader_node=None):
         """Simulate time passage with compensation"""
@@ -87,6 +92,28 @@ class VirtualNode:
         """Reset drift history for new tests"""
         self.drift_history = []
         self.clock.reset()
+
+    def cpu_loop(self, run_time=10):
+        """Fake CPU loop that processes events from the event queue."""
+        self.cpu_running = True
+        end_time = time.monotonic() + run_time
+        while self.cpu_running and time.monotonic() < end_time:
+            try:
+                event = self.event_queue.get(timeout=0.1)
+                self.handle_event(event)
+            except queue.Empty:
+                pass  # No event, idle
+            # Simulate CPU doing background work
+            time.sleep(0.01)
+        self.cpu_running = False
+
+    def handle_event(self, event):
+        """Process a single event (placeholder logic)."""
+        logging.info(f"{self.id} handling event: {event}")
+
+    def post_event(self, event):
+        """Add an event to the node's event queue."""
+        self.event_queue.put(event)
 
 def calculate_fingerprint_distance(fp1, fp2):
     """Calculate normalized Hamming distance between hex fingerprints"""
