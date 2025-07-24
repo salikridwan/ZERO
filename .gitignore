@@ -27,3 +27,6 @@ Thumbs.db
 *.pyc
 data/
 .DS_Store
+
+# Ignore the remove_comments script
+remove_comments.py

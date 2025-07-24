@@ -28,26 +28,32 @@
 # WARNING: Experimental hardware interactions
 # -------------------------------------------------
 
-# File: temporal_fingerprint.py
+# File: beacon_synchronization.py
 
-import hashlib
-import numpy as np
-from scipy import stats
-import struct
-def generate_fingerprint(drift_data, window_size=30):
-    if isinstance(drift_data, list):
-        drift_data = np.array(drift_data)
-    samples = int(window_size * 10)
-    window = drift_data[-samples:] if len(drift_data) >= samples else drift_data
-    features = [
-        np.mean(window),
-        np.median(window),
-        np.std(window),
-        stats.skew(window),
-        stats.kurtosis(window),
-        np.max(window) - np.min(window),
-        np.percentile(window, 10),
-        np.percentile(window, 90)
-    ]
-    feature_bytes = b''.join([struct.pack('<d', f) for f in features])
-    return hashlib.sha256(feature_bytes).hexdigest()
+import time
+from .synchronization import TimeSynchronizer
+class BeaconSync:
+    def __init__(self, node_id, beacon_interval=10):
+        self.synchronizer = TimeSynchronizer(node_id)
+        self.beacon_interval = beacon_interval
+        self.last_beacon_time = 0
+        self.node_id = node_id
+    def receive_beacon(self, beacon_time):
+        current_time = time.time()
+        processing_delay = (time.time() - current_time) / 2
+        adjusted_beacon_time = beacon_time + processing_delay
+        residual = self.synchronizer.synchronize(adjusted_beacon_time)
+        print(f"[Node {self.node_id}] Sync: Reference={adjusted_beacon_time:.6f}, "
+              f"Residual={residual:.6f}s, Next sync in {self.synchronizer.actual_sync_interval:.1f}s")
+        return residual
+    def get_adjusted_time(self):
+        return self.synchronizer.get_corrected_time()
+    def should_send_beacon(self):
+        return (time.time() - self.last_beacon_time) >= self.beacon_interval
+    def send_beacon(self):
+        self.last_beacon_time = time.time()
+        return {
+            'node_id': self.node_id,
+            'beacon_time': self.get_adjusted_time(),
+            'sync_params': self.synchronizer.get_sync_parameters()
+        }

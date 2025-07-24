@@ -28,8 +28,9 @@
 # WARNING: Experimental hardware interactions
 # -------------------------------------------------
 
-import numpy as np
+# File: clock_drift_model.py
 
+import numpy as np
 def generate_drift_profile(
     length,
     sampling_rate=1,
@@ -42,16 +43,8 @@ def generate_drift_profile(
     power_events=None,
     burst_params=None
 ):
-    """
-    Generate a drift profile with optional parameterization and event injection.
-    profile_type: "slow_sine", "burst", "ramp", etc.
-    thermal_spikes: list of (start_idx, duration, magnitude) tuples
-    power_events: list of (idx, offset) tuples (step changes)
-    burst_params: dict with keys 'start', 'duration', 'magnitude'
-    """
     t = np.arange(0, length, sampling_rate)
     drift = np.zeros_like(t, dtype=float)
-
     if profile_type == "slow_sine":
         drift = (
             sine_amplitude * np.sin(sine_freq * t) +
@@ -69,33 +62,25 @@ def generate_drift_profile(
     elif profile_type == "ramp":
         drift = drift_slope * t + np.random.normal(0, noise_std, len(t))
     else:
-        # Default: slow_sine
         drift = (
             sine_amplitude * np.sin(sine_freq * t) +
             np.random.normal(0, noise_std, len(t)) +
             drift_slope * t
         )
-
-    # Inject thermal spikes
     if thermal_spikes:
         for start, duration, magnitude in thermal_spikes:
             end = min(start + duration, len(drift))
             drift[start:end] += magnitude
-    # Inject power events (step changes)
     if power_events:
         for idx, offset in power_events:
             if 0 <= idx < len(drift):
                 drift[idx:] += offset
-
-    # Clamp drift to not go below -70 ppm
     drift = np.maximum(drift, -70.0)
-    # Clamp stddev to < 1.0
     std = np.std(drift)
     if std > 1.0:
         mean = np.mean(drift)
         drift = mean + (drift - mean) * (1.0 / std)
-    return drift  # in PPM
-
+    return drift  
 def apply_drift_to_clock(
     drift_profile,
     initial_time=0.0,
@@ -104,23 +89,15 @@ def apply_drift_to_clock(
     inverse=False,
     allow_mismatch=False
 ):
-    """
-    Simulate a logical clock with drift and optional compensation.
-    If inverse=True, removes drift (recovers baseline time).
-    If allow_mismatch=True, compensation_profile can be shorter than drift_profile (missing values treated as 0).
-    """
     logical_clock = initial_time
     logical_clock_trace = []
     n = len(drift_profile)
     comp = compensation_profile if compensation_profile is not None else None
-
     if comp is not None and not allow_mismatch and len(comp) != n:
         raise ValueError("compensation_profile length must match drift_profile length")
-
     for i, drift_ppm in enumerate(drift_profile):
         drift_factor = (1 + drift_ppm * 1e-6) if not inverse else (1 - drift_ppm * 1e-6)
         logical_clock += sampling_rate * drift_factor
-        # Apply compensation if provided
         if comp is not None:
             if i < len(comp):
                 logical_clock += comp[i]
@@ -128,3 +105,27 @@ def apply_drift_to_clock(
                 logical_clock += 0
         logical_clock_trace.append(logical_clock)
     return np.array(logical_clock_trace)
+def simulate_drift(elapsed_time, factor=1.0, temp=25.0, stability=0.0001):
+    base_drift = stability * elapsed_time
+    temp_effect = 0.0005 * (temp - 25)**2 * elapsed_time / 1e6
+    random_walk = np.random.normal(0, 0.1 * np.sqrt(elapsed_time))
+    aging = 0.01 * np.log(1 + elapsed_time / 3600)
+    return factor * (base_drift + temp_effect + random_walk + aging)
+class CompensatedClock:
+    def __init__(self, node_id, base_clock, compensation_model):
+        self.node_id = node_id
+        self.base_clock = base_clock
+        self.compensation_model = compensation_model
+        self.drift_history = []
+    def get_time(self):
+        raw_time = self.base_clock.get_time()
+        compensation = self.compensation_model.predict(raw_time)
+        return raw_time - compensation
+    def update_model(self, reference_time):
+        local_time = self.base_clock.get_time()
+        current_drift = local_time - reference_time
+        self.compensation_model.update(local_time, current_drift)
+        self.drift_history.append(current_drift)
+        return current_drift
+    def get_drift(self):
+        return self.drift_history[-1] if self.drift_history else 0

@@ -28,26 +28,29 @@
 # WARNING: Experimental hardware interactions
 # -------------------------------------------------
 
-# File: temporal_fingerprint.py
+# File: stress_tests.py
 
-import hashlib
-import numpy as np
-from scipy import stats
-import struct
-def generate_fingerprint(drift_data, window_size=30):
-    if isinstance(drift_data, list):
-        drift_data = np.array(drift_data)
-    samples = int(window_size * 10)
-    window = drift_data[-samples:] if len(drift_data) >= samples else drift_data
-    features = [
-        np.mean(window),
-        np.median(window),
-        np.std(window),
-        stats.skew(window),
-        stats.kurtosis(window),
-        np.max(window) - np.min(window),
-        np.percentile(window, 10),
-        np.percentile(window, 90)
-    ]
-    feature_bytes = b''.join([struct.pack('<d', f) for f in features])
-    return hashlib.sha256(feature_bytes).hexdigest()
+def execute_corner_cases(hal, mode="WSL"):
+    print(f"Executing corner cases in {mode} mode...")
+    for dip_duration in [0.1, 0.5, 1.0]:
+        if mode == "WSL":
+            print(f"Simulating power interruption for {dip_duration} seconds")
+        else:
+            hal.power_supply.interrupt(dip_duration)
+        validate_clock_recovery(hal)
+    if mode == "WSL":
+        print("Simulating rapid thermal transients (10°C/minute) from 25°C to 85°C")
+    else:
+        hal.chamber.ramp(25, 85, rate=10)
+    monitor_compensation_response()
+    for freq in [1, 10, 100, 1000]:  
+        if mode == "WSL":
+            print(f"Simulating EMI at {freq} kHz")
+        else:
+            hal.emi_generator.set_frequency(freq * 1000)
+        measure_jitter_increase()
+    if mode == "WSL":
+        print("Simulating brownout recovery with 50 cycles between 2.0V and 3.3V")
+    else:
+        hal.power_supply.brownout_sequence(2.0, 3.3, cycles=50)
+    check_clock_integrity()

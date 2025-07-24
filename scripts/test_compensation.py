@@ -28,86 +28,63 @@
 # WARNING: Experimental hardware interactions
 # -------------------------------------------------
 
+# File: test_compensation.py
+
 import time
 import numpy as np
 import matplotlib.pyplot as plt
 from core.simulation.node_simulation import VirtualNode
-
+from core.sync.beacon_sync import BeaconSync
+from core.simulation.clock_drift_model import simulate_drift
 def run_compensation_test():
     print("=== Drift Compensation Effectiveness Test ===")
-    
-    # Create nodes with different drift profiles
     node_a = VirtualNode("NODE-A", base_drift=15, compensation_interval=0.5)
     node_b = VirtualNode("NODE-B", base_drift=10, compensation_interval=0.5)
-    
-    # Test parameters
-    test_duration = 300  # 5 minutes
-    interval = 10        # Seconds between measurements
-    sync_interval = 30   # Sync every 30 seconds
-    
-    # Data collection
+    test_duration = 300  
+    interval = 10        
+    sync_interval = 30   
     times = []
     distances = []
     node_a_drifts = []
     node_b_drifts = []
     compensation_stats = []
     live_corrections = []
-
     start_time = time.monotonic()
     current_time = start_time
-
     print("Running test...")
     while current_time - start_time < test_duration:
-        # Simulate with periodic sync
         node_a.simulate_drift(interval, leader_node=node_a)
-        node_b.simulate_drift(interval, leader_node=node_a)  # Node A is leader
-
-        # --- Live Drift Compensation Engine™ simulation ---
-        # Get the most recent drift measurement for node_b
+        node_b.simulate_drift(interval, leader_node=node_a)  
         if node_b.drift_history:
             drift_meas = node_b.drift_history[-1]
-            # Compute live correction (in seconds) for the interval
             correction = node_b.clock.predictor.apply_correction(drift_meas, interval)
         else:
             correction = 0.0
         live_corrections.append(correction)
-        # Optionally, apply this correction to a simulated logical clock here if desired
-
-        # Validate fingerprints
         distance = calculate_fingerprint_distance(
             node_a.get_fingerprint(),
             node_b.get_fingerprint()
         )
-        
-        # Record data
         elapsed = current_time - start_time
         times.append(elapsed)
         distances.append(distance)
         node_a_drifts.append(np.mean(node_a.drift_history[-100:]))
         node_b_drifts.append(np.mean(node_b.drift_history[-100:]))
         compensation_stats.append(node_b.clock.get_stats())
-        
         current_time = time.monotonic()
-    
-    # Analyze results
     pass_rate = np.mean([d < 0.1 for d in distances]) * 100
     avg_error = np.mean([s['accumulated_error'] for s in compensation_stats])
-    
     print(f"\nResults after {test_duration} seconds:")
     print(f"Pass rate: {pass_rate:.2f}%")
     print(f"Avg accumulated error: {avg_error:.6f} seconds")
     print(f"Sync events: {compensation_stats[-1]['compensation_count']}")
-    
-    # Plot results
     plt.figure(figsize=(12, 10))
-    
     plt.subplot(3, 1, 1)
     plt.plot(times, distances, 'b-', label='Fingerprint Distance')
     plt.axhline(y=0.1, color='r', linestyle='--', label='Threshold')
     plt.ylabel('Fingerprint Distance')
     plt.title('Temporal Synchronization Quality')
     plt.legend()
-    
     plt.subplot(3, 1, 2)
     plt.plot(times, node_a_drifts, 'g-', label='Node A Drift')
     plt.plot(times, node_b_drifts, 'm-', label='Node B Drift')
@@ -117,17 +94,44 @@ def run_compensation_test():
     plt.ylabel('Drift (PPM)')
     plt.title('Drift Behavior with Compensation')
     plt.legend()
-
     plt.subplot(3, 1, 3)
     plt.plot(times, live_corrections, 'k-', label='Live Correction (s)')
     plt.xlabel('Time (seconds)')
     plt.ylabel('Correction (seconds)')
     plt.title('Live Drift Compensation Engine™ Output')
     plt.legend()
-    
     plt.tight_layout()
     plt.savefig('logs/compensation_results.png')
     print("Results saved to logs/compensation_results.png")
-
+def test_compensation():
+    print("Testing Clock Drift Compensation\n" + "="*40)
+    master = BeaconSync("master")
+    node1 = BeaconSync("node1")
+    node2 = BeaconSync("node2")
+    start_time = time.time()
+    duration = 3600  
+    last_beacon = time.time()
+    while time.time() - start_time < duration:
+        current_time = time.time()
+        if master.should_send_beacon():
+            beacon = master.send_beacon()
+            node1.receive_beacon(beacon['beacon_time'])
+            node2.receive_beacon(beacon['beacon_time'])
+            last_beacon = current_time
+        master_time = current_time
+        node1_time = current_time + simulate_drift(current_time - start_time)
+        node2_time = current_time + simulate_drift(current_time - start_time, factor=1.5)
+        master_adj = master.get_adjusted_time()
+        node1_adj = node1.get_adjusted_time()
+        node2_adj = node2.get_adjusted_time()
+        error1 = abs(node1_adj - master_adj)
+        error2 = abs(node2_adj - master_adj)
+        if current_time - last_beacon > 10:
+            print(f"[T+{current_time-start_time:.0f}s] "
+                  f"Errors: Node1={error1*1000:.2f}ms, Node2={error2*1000:.2f}ms")
+            last_beacon = current_time
+        time.sleep(0.1)
+    print("\nTest completed!")
 if __name__ == "__main__":
     run_compensation_test()
+    test_compensation()

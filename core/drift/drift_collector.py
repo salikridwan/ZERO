@@ -28,10 +28,7 @@
 # WARNING: Experimental hardware interactions
 # -------------------------------------------------
 
-"""
-Zero Architecture - Phase 1: Drift Measurement Core (DMC)
-Optimized for WSL (Windows Subsystem for Linux)
-"""
+# File: drift_collector.py
 
 import time
 import numpy as np
@@ -41,22 +38,15 @@ import logging
 from datetime import datetime
 import os
 import platform
-# Use relative import for DriftPredictor
 from .drift_predictor import DriftPredictor
-
-# Configuration
-SAMPLE_INTERVAL = 0.1  # Seconds (100ms)
-BUFFER_SIZE = 6000     # 10 minutes of data at 0.1s interval
+SAMPLE_INTERVAL = 0.1  
+BUFFER_SIZE = 6000     
 LOG_DIR = "logs"
 DEBUG_MODE = True
-WARMUP_SAMPLES = 5     # ignore first few samples
-
-# Create logs directory
+WARMUP_SAMPLES = 5     
 os.makedirs(LOG_DIR, exist_ok=True)
-
 class DriftCollector:
     def __init__(self, external_sync_fn=None):
-        # Allow clocks to stabilize
         time.sleep(1)
         self.reference_start = time.perf_counter()
         self.monotonic_start = time.monotonic()
@@ -64,36 +54,24 @@ class DriftCollector:
         self.index = 0
         self.running = True
         self.log_file = os.path.join(LOG_DIR, f"drift_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-        self.predictor = DriftPredictor(model_type='kalman')  # or 'ar1'
-        self.external_sync_fn = external_sync_fn  # Callable that returns external sync drift_ppm or None
-        
-        # Configure logging
+        self.predictor = DriftPredictor(model_type='kalman')  
+        self.external_sync_fn = external_sync_fn  
         logging.basicConfig(
             level=logging.DEBUG if DEBUG_MODE else logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s'
         )
-        
-        # Register exit handler
         signal.signal(signal.SIGINT, self.safe_exit)
         signal.signal(signal.SIGTERM, self.safe_exit)
-        
-        # Log system information
         self.log_system_info()
-        
-        # Create CSV logfile
         with open(self.log_file, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['timestamp', 'monotonic', 'perf_counter', 'drift_ppm', 'predicted_drift_ppm'])
-
     def log_system_info(self):
-        """Log system configuration details"""
         logging.info(f"System: {platform.system()} {platform.release()}")
         logging.info(f"Processor: {platform.processor()}")
         logging.info(f"Python: {platform.python_version()}")
         logging.info(f"WSL Version: {self.get_wsl_version()}")
-
     def get_wsl_version(self):
-        """Attempt to determine WSL version"""
         try:
             with open('/proc/version', 'r') as f:
                 version_info = f.read()
@@ -102,69 +80,46 @@ class DriftCollector:
                 return "Native Linux"
         except:
             return "Unknown"
-
     def measure_drift(self):
-        """Capture single drift measurement"""
         monotonic_current = time.monotonic() - self.monotonic_start
         perf_current = time.perf_counter() - self.reference_start
-        
-        # Calculate drift in parts per million
         expected = perf_current
         actual = monotonic_current
         drift_ppm = 1e6 * (actual - expected) / expected if expected > 0 else 0
-
-        # clamp if drift explodes
         if abs(drift_ppm) > 100:
             drift_ppm = 0
-        
         return {
             'timestamp': datetime.utcnow().isoformat(),
             'monotonic': monotonic_current,
             'perf_counter': perf_current,
             'drift_ppm': drift_ppm
         }
-
     def safe_exit(self, signum, frame):
-        """Handle graceful shutdown"""
         logging.info("Shutting down drift collector")
         self.running = False
-
     def run(self):
-        """Main collection loop"""
         logging.info(f"Starting Drift Measurement Core (Interval: {SAMPLE_INTERVAL}s)")
         logging.info(f"Logging to: {self.log_file}")
-        
         WARMUP_SAMPLES = 10
         sample_count = 0
-
         while self.running:
             start_time = time.perf_counter()
             measurement = self.measure_drift()
             sample_count += 1
-
             if sample_count <= WARMUP_SAMPLES:
-                continue  # skip these early cursed values
-
+                continue  
             drift = measurement['drift_ppm']
-            # Optionally pull external sync input
             external_drift = None
             if self.external_sync_fn is not None:
                 try:
                     external_drift = self.external_sync_fn()
                 except Exception as e:
                     logging.warning(f"External sync input failed: {e}")
-            # Prefer external sync if available
             drift_input = external_drift if external_drift is not None else drift
-
-            # Update circular buffer
             self.drift_buffer[self.index] = drift_input
             self.index = (self.index + 1) % BUFFER_SIZE
-
-            # Update predictor and get prediction
             self.predictor.update(drift_input)
             predicted_drift = self.predictor.predict()
-
-            # Log to CSV
             with open(self.log_file, 'a', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow([
@@ -174,8 +129,6 @@ class DriftCollector:
                     drift_input,
                     predicted_drift
                 ])
-
-            # Calculate statistics on full buffer
             if self.index == 0:
                 window = self.drift_buffer
                 stats = {
@@ -187,12 +140,9 @@ class DriftCollector:
                 logging.debug(f"Drift Stats: μ={stats['mean']:.2f}ppm σ={stats['std']:.2f} "
                               f"Range=[{stats['min']:.2f}, {stats['max']:.2f}] "
                               f"Predictor: {predicted_drift:.2f}ppm")
-            
-            # Sleep for remaining interval
             elapsed = time.perf_counter() - start_time
             sleep_time = max(0, SAMPLE_INTERVAL - elapsed)
             time.sleep(sleep_time)
-
 if __name__ == "__main__":
     collector = DriftCollector()
     collector.run()
